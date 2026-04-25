@@ -100,6 +100,18 @@ class LyricsServer:
         if action == "set_lyrics_delay":
             return self.manager.set_lyrics_delay_seconds(value)
 
+        if action == "seek_to":
+            name = player_name or self.manager.playername
+            if not name:
+                return False
+            player = MprisPlayer(name)
+            if not player or not player.obj:
+                return False
+            try:
+                return player.seek_to(int(value))
+            except (TypeError, ValueError):
+                return False
+
         name = player_name or self.manager.playername
         if not name:
             return False

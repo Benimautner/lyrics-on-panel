@@ -164,14 +164,25 @@ class MprisPlayer:
         except: pass
 
 
+    def seek_to(self, position_us):
+        try:
+            track_id = self.track_info.get('track_id')
+            if track_id:
+                self.player_iface.SetPosition(track_id, dbus.Int64(position_us))
+                return True
+        except dbus.exceptions.DBusException:
+            pass
+        return False
+
+
     # --- Properties ---
     @property
     def playback_status(self):
         # "Playing", "Paused", "Stopped"
         val = self._get_property(MPRIS_PLAYER_IFACE, 'PlaybackStatus')
         return PlaybackStatus(str(val)) if val else PlaybackStatus.STOPPED
-    
-    
+
+
     @property
     def loop_status(self):
         # "None", "Track", "Playlist"
@@ -314,7 +325,7 @@ class MprisPlayer:
         """Retrieves all properties from both MPRIS2 interfaces as a standard Python dictionary."""
         data = {}
         if not self.obj: return data
-        
+
         def unwrap(val):
             if isinstance(val, dbus.String): return str(val)
             if isinstance(val, (dbus.Int16, dbus.Int32, dbus.Int64, dbus.UInt16, dbus.UInt32, dbus.UInt64)): return int(val)
@@ -327,10 +338,10 @@ class MprisPlayer:
         try:
             root_props = self.props_iface.GetAll(MPRIS_ROOT_IFACE)
             player_props = self.props_iface.GetAll(MPRIS_PLAYER_IFACE)
-            
+
             data['root'] = unwrap(root_props)
             data['player'] = unwrap(player_props)
         except dbus.exceptions.DBusException as e:
             print(f"Error fetching full state for {self.dbus_identifier}: {e}")
-            
+
         return data

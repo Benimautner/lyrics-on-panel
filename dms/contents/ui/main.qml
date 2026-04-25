@@ -172,7 +172,7 @@ PluginComponent {
     verticalBarPill: Component {
         Column {
             spacing: root.config_mediaControllSpacing
-            
+
             StyledText {
                 text: root.currentLyric || root.lrc_not_exists
                 font.pixelSize: root.config_lyricTextSize - 2
@@ -341,6 +341,13 @@ PluginComponent {
                                 font.bold: index === root.currentLyricIndex
                                 wrapMode: Text.WordWrap
                                 elide: Text.ElideNone
+                            }
+
+                            MouseArea {
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.seekToLyric(modelData)
                             }
                         }
                     }
@@ -522,6 +529,22 @@ PluginComponent {
         var request = {
             "action": "set_lyrics_delay",
             "value": seconds
+        }
+        controlSocket.sendTextMessage(JSON.stringify(request))
+    }
+
+    function seekToLyric(line) {
+        if (controlSocket.status !== WebSocket.Open) {
+            console.log("Control socket not connected")
+            return
+        }
+        if (!line || line.time_ms === undefined || line.time_ms === null) {
+            return
+        }
+        var request = {
+            "action": "seek_to",
+            "player": requestedPlayer || currentPlayerBusName || null,
+            "value": line.time_ms
         }
         controlSocket.sendTextMessage(JSON.stringify(request))
     }
