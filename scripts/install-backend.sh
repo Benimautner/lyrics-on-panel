@@ -19,8 +19,8 @@ fi
 
 # Step 1: Install build dependencies for dbus-python
 # Todo: Debian / Nix / SUSE support
-echo -e "\n${YELLOW}[1/5] Installing system build dependencies...${NC}"
-sudo pacman -S --needed --noconfirm git curl dbus glib2 pkgconf base-devel
+#echo -e "\n${YELLOW}[1/5] Installing system build dependencies...${NC}"
+#sudo pacman -S --needed --noconfirm git curl dbus glib2 pkgconf base-devel
 
 # Step 2: Install uv
 echo -e "\n${YELLOW}[2/5] Setting up uv...${NC}"
@@ -31,14 +31,15 @@ fi
 echo -e "${GREEN}uv: $(uv --version)${NC}"
 
 # Step 3: Clone/update repository
-echo -e "\n${YELLOW}[3/5] Cloning project...${NC}"
-rm -rf "$INSTALL_DIR"
-git clone "$REPO_URL" "$INSTALL_DIR"
+#echo -e "\n${YELLOW}[3/5] Cloning project...${NC}"
+#rm -rf "$INSTALL_DIR"
+#git clone "$REPO_URL" "$INSTALL_DIR"
 
 # Step 4: Create venv with Python 3.13 and install dependencies
 echo -e "\n${YELLOW}[4/5] Creating Python environment...${NC}"
 mkdir -p "$INSTALL_DIR/backend"
 cd "$INSTALL_DIR/backend"
+
 
 uv self update
 uv venv --python 3.13.11

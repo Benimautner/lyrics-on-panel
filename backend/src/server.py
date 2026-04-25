@@ -85,8 +85,9 @@ class LyricsServer:
                     data = json.loads(message)
                     action = data.get("action")
                     player_name = data.get("player")
+                    value = data.get("value")
                     loop = asyncio.get_running_loop()
-                    success = await loop.run_in_executor(None, self._execute_control, action, player_name)
+                    success = await loop.run_in_executor(None, self._execute_control, action, player_name, value)
                     await websocket.send(json.dumps({"success": success}))
                 except json.JSONDecodeError:
                     await websocket.send(json.dumps({"error": "Invalid JSON"}))
@@ -94,8 +95,11 @@ class LyricsServer:
             pass
 
 
-    def _execute_control(self, action, player_name):
+    def _execute_control(self, action, player_name, value=None):
         """Execute playback control. Returns True on success, False on failure."""
+        if action == "set_lyrics_delay":
+            return self.manager.set_lyrics_delay_seconds(value)
+
         name = player_name or self.manager.playername
         if not name:
             return False

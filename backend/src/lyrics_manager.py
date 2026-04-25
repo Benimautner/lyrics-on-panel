@@ -16,12 +16,25 @@ class LyricsManager:
     def __init__(self):
         self.lyrics_cache = {}
         self._fetch_id = 0
+        self.lyrics_delay_us = 0
         self.setup()
-    
-    
+
+
+    def set_lyrics_delay_seconds(self, delay_seconds):
+        """Set in-memory lyrics delay offset in seconds, clamped to [-3, 3]."""
+        try:
+            value = float(delay_seconds)
+        except (TypeError, ValueError):
+            return False
+        value = max(-3.0, min(3.0, value))
+        self.lyrics_delay_us = int(value * 1000000)
+        return True
+
+
     def setup(self, playername=None, playerobj=None, title=None, artist=None, album=None,
               duration=0, identity=None, lyrics=None, current_lyric=None,
-              playback_status=PlaybackStatus.STOPPED, position_ms=0, available_players=None):
+              playback_status=PlaybackStatus.STOPPED, position_ms=0, available_players=None,
+              lyrics_status="idle"):
         self.playername = playername
         self.playerobj = playerobj
         self.title = title
@@ -34,16 +47,17 @@ class LyricsManager:
         self.playback_status = playback_status
         self.position_ms = position_ms
         self.available_players = available_players or []
-    
-    
+        self.lyrics_status = lyrics_status
+
+
     def poll_status(self, requested_playername=None):
         """
         Polls for player changes and state updates.
-        
+
         requested_playername == None => Global Mode
                         == 'org.mpris.MediaPlayer2.spotify' => Spotify Mode
                         == 'org.mpris.MediaPlayer2.yesplaymusic' => YesPlayMusic Mode
-        
+
         Args:
             requested_playername (str, optional): The specific DBus name to track (e.g. 'org.mpris.MediaPlayer2.spotify').
                                              If None, defaults to the first available player.
@@ -54,14 +68,14 @@ class LyricsManager:
             # 2. If a specific target is requested:
                 # 2.1 If the requested target exists in the mpris2 dbus interface: pick it.
                 # 2.2 Otherwise, return empty state as the requested player is not playing.
-            # 3. If no target requested, and then we enter the multiplexing mode. 
+            # 3. If no target requested, and then we enter the multiplexing mode.
                 # 3.1 If there is a player with playing status, pick it.
                 # 3.2 If there is no player with playing status, fallback to the first player(paused/stopped) exists in mpris dbus.
                     # 3.2.1 If there is no player exists in the mpris dbus, return empty state.
         def set_free():
             self.setup()
             return self._get_empty_state()
-        
+
         if not playernames:
             return set_free()
         current_playername = self.playername
@@ -128,12 +142,16 @@ class LyricsManager:
                     and cached['artist'] == track_info['artist']
                     and cached['album'] == track_info['album']):
                 self.lyrics = cached['lyrics']
+                self.lyrics_status = "fetched"
             else:
                 self.lyrics = None
+                self.lyrics_status = "fetching"
                 self._fetch_id += 1
                 threading.Thread(target=self._fetch_lyrics, args=(current_playername, track_info, self._fetch_id), daemon=True).start()
+        elif self.lyrics and self.lyrics_status != "fetching":
+            self.lyrics_status = "fetched"
         self.position_ms = position
-        current_lyric = self._get_current_lyric()
+        current_lyric_info = self._get_current_lyric_info()
         self.setup(
             playername=current_playername,
             playerobj=current_playerobj,
@@ -143,12 +161,13 @@ class LyricsManager:
             duration=track_info['length'],
             identity=identity,
             lyrics=self.lyrics,
-            current_lyric=current_lyric,
+            current_lyric=current_lyric_info['lyric'],
             playback_status=playback_status,
             position_ms=position,
-            available_players=playernames
+            available_players=playernames,
+            lyrics_status=self.lyrics_status
         )
-        return self.get_state()
+        return self.get_state(current_lyric_info['index'])
 
 
     def _fetch_lyrics(self, playername, track_info, fetch_id):
@@ -162,6 +181,9 @@ class LyricsManager:
         length = track_info['length']
         url = track_info['url']
         if not title or not artists:
+            if self._fetch_id == fetch_id:
+                self.lyrics = None
+                self.lyrics_status = "failed"
             return
         try:
             lyrics = None
@@ -180,18 +202,22 @@ class LyricsManager:
             if self._fetch_id == fetch_id:
                 self.lyrics = lyrics
                 if lyrics:
+                    self.lyrics_status = "fetched"
                     self.lyrics_cache[playername] = {
                         'title': title,
                         'artist': artists,
                         'album': album,
                         'lyrics': lyrics
                     }
+                else:
+                    self.lyrics_status = "failed"
         except Exception as e:
             if self._fetch_id == fetch_id:
                 self.lyrics = None
+                self.lyrics_status = "failed"
 
 
-    def _http_get(self, url, timeout=5):
+    def _http_get(self, url, timeout=15):
         """Simple HTTP GET using urllib. Returns (status_code, data) tuple."""
         try:
             with urllib.request.urlopen(url, timeout=timeout) as resp:
@@ -312,32 +338,33 @@ class LyricsManager:
         return lines
 
 
-    def _get_current_lyric(self):
+    def _get_current_lyric_info(self):
         if not self.lyrics:
-            return None
+            return {"lyric": None, "index": -1}
+        effective_position = self.position_ms - self.lyrics_delay_us
         lyrics_line_num = len(self.lyrics)
         start = 0
         end = lyrics_line_num - 1
         while start <= end:
             mid = (start + end) >> 1
-            if self.position_ms == self.lyrics[mid]['time_ms']:
+            if effective_position == self.lyrics[mid]['time_ms']:
                 end = mid
                 break
-            if self.position_ms > self.lyrics[mid]['time_ms']:
+            if effective_position > self.lyrics[mid]['time_ms']:
                 start = mid + 1
             else:
                 end = mid - 1
         if end < 0:
-            return None
+            return {"lyric": None, "index": -1}
         # If current lyric is empty, find the previous non-empty one
         while end >= 0 and not self.lyrics[end]['lyric']:
             end -= 1
         if end < 0:
-            return None
-        return self.lyrics[end]['lyric']       
-        
-        
-    def get_state(self):
+            return {"lyric": None, "index": -1}
+        return {"lyric": self.lyrics[end]['lyric'], "index": end}
+
+
+    def get_state(self, current_lyric_index=-1):
         if not self.playerobj:
             return self._get_empty_state()
         return {
@@ -355,7 +382,11 @@ class LyricsManager:
             "position_ms": self.position_ms,
             "lyrics": {
                 'current_lyric': self.current_lyric,
+                'current_index': current_lyric_index,
+                'lines': self.lyrics or [],
+                'status': self.lyrics_status,
             },
+            "lyrics_delay_seconds": self.lyrics_delay_us / 1000000.0,
             "available_players": self.available_players
         }
 

@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import QtWebSockets
 import qs.Common
 import qs.Services
@@ -57,6 +58,10 @@ PluginComponent {
     property string currentPlayerIdentity: ""
     property string currentPlayerBusName: ""
     property int positionMs: 0
+    property real lyricDelaySeconds: 0.0
+    property string lyricsFetchStatus: "idle"
+    property var syncedLyricsLines: []
+    property int currentLyricIndex: -1
     property bool hasActivePlayer: false
     property var availablePlayers: []
     property string selectedPlayer: ""
@@ -189,65 +194,180 @@ PluginComponent {
         PopoutComponent {
             id: popoutColumn
 
-            headerText: "Media Players"
-            detailsText: "Select a player"
+            headerText: "Lyrics"
+            detailsText: root.currentTitle ? (root.currentTitle + " - " + root.currentArtist) : "No track"
             showCloseButton: true
 
-            Item {
+            Column {
                 width: parent.width
-                implicitHeight: playerList.contentHeight
+                spacing: Theme.spacingM
 
-                ListView {
-                    id: playerList
-                    anchors.fill: parent
-                    model: root.availablePlayers
-                    spacing: Theme.spacingXS
+                StyledText {
+                    text: "Players"
+                    color: Theme.surfaceVariantText
+                    font.pixelSize: Theme.fontSizeSmall
+                }
 
-                    delegate: StyledRect {
-                        width: playerList.width
-                        height: 40
-                        radius: Theme.cornerRadius
-                        color: playerMouse.containsMouse ? Theme.surfaceContainerHighest : Theme.surfaceContainerHigh
+                Item {
+                    width: parent.width
+                    height: Math.min(playerList.contentHeight, 140)
 
-                        Row {
-                            anchors.fill: parent
-                            anchors.leftMargin: Theme.spacingM
-                            anchors.rightMargin: Theme.spacingM
-                            spacing: Theme.spacingS
+                    ListView {
+                        id: playerList
+                        anchors.fill: parent
+                        clip: true
+                        model: root.availablePlayers
+                        spacing: Theme.spacingXS
 
-                            StyledText {
-                                text: modelData === root.currentPlayerBusName ? "\u25CF" : "\u25CB"
-                                color: modelData === root.currentPlayerBusName ? Theme.primary : Theme.surfaceVariantText
-                                font.pixelSize: Theme.fontSizeSmall
-                                anchors.verticalCenter: parent.verticalCenter
+                        delegate: StyledRect {
+                            width: playerList.width
+                            height: 36
+                            radius: Theme.cornerRadius
+                            color: playerMouse.containsMouse ? Theme.surfaceContainerHighest : Theme.surfaceContainerHigh
+
+                            Row {
+                                anchors.fill: parent
+                                anchors.leftMargin: Theme.spacingM
+                                anchors.rightMargin: Theme.spacingM
+                                spacing: Theme.spacingS
+
+                                StyledText {
+                                    text: modelData === root.currentPlayerBusName ? "\u25CF" : "\u25CB"
+                                    color: modelData === root.currentPlayerBusName ? Theme.primary : Theme.surfaceVariantText
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+
+                                StyledText {
+                                    text: modelData.replace("org.mpris.MediaPlayer2.", "")
+                                    color: Theme.surfaceText
+                                    font.pixelSize: Theme.fontSizeMedium
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
                             }
 
+                            MouseArea {
+                                id: playerMouse
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    root.selectedPlayer = modelData
+                                }
+                            }
+                        }
+                    }
+                }
+
+                StyledText {
+                    text: "Lyric delay: " + (root.lyricDelaySeconds >= 0 ? "+" : "") + root.lyricDelaySeconds.toFixed(1) + "s"
+                    color: Theme.surfaceVariantText
+                    font.pixelSize: Theme.fontSizeSmall
+                }
+
+                Slider {
+                    id: delaySlider
+                    width: parent.width
+                    from: -3.0
+                    to: 3.0
+                    stepSize: 0.1
+                    value: root.lyricDelaySeconds
+
+                    onMoved: {
+                        root.lyricDelaySeconds = value
+                        root.sendDelayOffset(value)
+                    }
+                }
+
+                StyledRect {
+                    width: parent.width
+                    height: 40
+                    radius: Theme.cornerRadius
+                    color: Theme.surfaceContainerHigh
+
+                    StyledText {
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.left: parent.left
+                        anchors.leftMargin: Theme.spacingM
+                        text: "Status: " + (root.lyricsFetchStatus === "fetched"
+                            ? "Fetched"
+                            : (root.lyricsFetchStatus === "fetching"
+                                ? "Fetching"
+                                : "Failed to find lyrics"))
+                        color: root.lyricsFetchStatus === "fetched"
+                            ? Theme.primary
+                            : (root.lyricsFetchStatus === "fetching" ? Theme.surfaceText : Theme.error)
+                        font.pixelSize: Theme.fontSizeSmall
+                        font.bold: true
+                    }
+                }
+
+                StyledText {
+                    text: "Lyrics"
+                    color: Theme.surfaceVariantText
+                    font.pixelSize: Theme.fontSizeSmall
+                }
+
+                StyledRect {
+                    width: parent.width
+                    height: 300
+                    radius: Theme.cornerRadius
+                    color: Theme.surfaceContainerHigh
+
+                    ListView {
+                        id: lyricsList
+                        anchors.fill: parent
+                        anchors.margins: Theme.spacingS
+                        clip: true
+                        spacing: Theme.spacingXS
+                        model: root.syncedLyricsLines
+
+                        delegate: StyledRect {
+                            width: lyricsList.width
+                            height: lyricText.implicitHeight + Theme.spacingS
+                            radius: Theme.cornerRadius
+                            color: index === root.currentLyricIndex ? Theme.primaryContainer : "transparent"
+
                             StyledText {
-                                text: modelData.replace("org.mpris.MediaPlayer2.", "")
-                                color: Theme.surfaceText
+                                id: lyricText
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.leftMargin: Theme.spacingS
+                                anchors.rightMargin: Theme.spacingS
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: (modelData && modelData.lyric) ? modelData.lyric : " "
+                                color: index === root.currentLyricIndex ? Theme.primary : Theme.surfaceText
                                 font.pixelSize: Theme.fontSizeMedium
-                                anchors.verticalCenter: parent.verticalCenter
+                                font.bold: index === root.currentLyricIndex
+                                wrapMode: Text.WordWrap
+                                elide: Text.ElideNone
                             }
                         }
+                    }
 
-                        MouseArea {
-                            id: playerMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                root.selectedPlayer = modelData
-                                popoutColumn.closePopout()
-                            }
-                        }
+                    StyledText {
+                        anchors.centerIn: parent
+                        visible: root.syncedLyricsLines.length === 0
+                        text: root.currentLyric || root.lrc_not_exists
+                        color: Theme.surfaceVariantText
+                        font.pixelSize: Theme.fontSizeMedium
+                    }
+                }
+            }
+
+            Connections {
+                target: root
+                function onCurrentLyricIndexChanged() {
+                    if (root.currentLyricIndex >= 0 && root.currentLyricIndex < lyricsList.count) {
+                        lyricsList.positionViewAtIndex(root.currentLyricIndex, ListView.Center)
                     }
                 }
             }
         }
     }
 
-    popoutWidth: 300
-    popoutHeight: Math.max(availablePlayers.length * 50 + 100, 150)
+    popoutWidth: 420
+    popoutHeight: 560
 
     // WebSocket connections
     WebSocket {
@@ -338,6 +458,10 @@ PluginComponent {
             currentTitle = ""
             currentArtist = ""
             currentAlbum = ""
+            syncedLyricsLines = []
+            currentLyricIndex = -1
+            lyricsFetchStatus = "idle"
+            availablePlayers = []
             playbackStatus = "stopped"
             return
         }
@@ -363,9 +487,43 @@ PluginComponent {
             currentLyric = ""
         }
 
+        if (data.lyrics && data.lyrics.lines) {
+            syncedLyricsLines = data.lyrics.lines
+        } else {
+            syncedLyricsLines = []
+        }
+
+        if (data.lyrics && data.lyrics.current_index !== undefined) {
+            currentLyricIndex = data.lyrics.current_index
+        } else {
+            currentLyricIndex = -1
+        }
+
+        if (data.lyrics && data.lyrics.status) {
+            lyricsFetchStatus = data.lyrics.status
+        } else {
+            lyricsFetchStatus = "idle"
+        }
+
+        if (data.lyrics_delay_seconds !== undefined && data.lyrics_delay_seconds !== null) {
+            lyricDelaySeconds = Number(data.lyrics_delay_seconds)
+        }
+
         if (data.available_players) {
             availablePlayers = data.available_players
         }
+    }
+
+    function sendDelayOffset(seconds) {
+        if (controlSocket.status !== WebSocket.Open) {
+            console.log("Control socket not connected")
+            return
+        }
+        var request = {
+            "action": "set_lyrics_delay",
+            "value": seconds
+        }
+        controlSocket.sendTextMessage(JSON.stringify(request))
     }
 
     function sendControl(action) {
